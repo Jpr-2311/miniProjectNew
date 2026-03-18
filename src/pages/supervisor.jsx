@@ -9,36 +9,35 @@ import {
   Tooltip,
   Legend
 } from "chart.js";
+import "./Supervisor.css";
 
-ChartJS.register(
-  LineElement,
-  PointElement,
-  LinearScale,
-  CategoryScale,
-  Tooltip,
-  Legend
-);
+ChartJS.register(LineElement, PointElement, LinearScale, CategoryScale, Tooltip, Legend);
 
 function Supervisor() {
   const [dataPoints, setDataPoints] = useState([]);
+  const [avg, setAvg]               = useState(0);
+  const [max, setMax]               = useState(0);
+  const [anomalies, setAnomalies]   = useState(0);
   const threshold = 0.26;
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setDataPoints(prev => {
-        const newValue = Math.random() * 0.4;
-        const updated = [...prev, newValue];
-        return updated.slice(-30);
-      });
-    }, 2000);
+    const fetchData = async () => {
+      try {
+        const res  = await fetch("http://localhost:5000/api/analytics");
+        const data = await res.json();
+        setDataPoints(data.history);
+        setAvg(data.avg);
+        setMax(data.max);
+        setAnomalies(data.anomalies);
+      } catch (err) {
+        console.error("Could not reach backend:", err);
+      }
+    };
 
+    fetchData();
+    const interval = setInterval(fetchData, 1500);
     return () => clearInterval(interval);
   }, []);
-
-  const avg =
-    dataPoints.reduce((a, b) => a + b, 0) / (dataPoints.length || 1);
-  const max = Math.max(...dataPoints, 0);
-  const anomalies = dataPoints.filter(v => v > threshold).length;
 
   const data = {
     labels: dataPoints.map((_, i) => i),
@@ -68,20 +67,16 @@ function Supervisor() {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: {
-        labels: {
-          color: "#cbd5e1"
-        }
-      }
+      legend: { labels: { color: "#cbd5e1" } }
     },
     scales: {
       x: {
         ticks: { color: "#64748b" },
-        grid: { color: "rgba(255,255,255,0.05)" }
+        grid:  { color: "rgba(255,255,255,0.05)" }
       },
       y: {
         ticks: { color: "#64748b" },
-        grid: { color: "rgba(255,255,255,0.05)" },
+        grid:  { color: "rgba(255,255,255,0.05)" },
         min: 0,
         max: 0.5
       }
