@@ -1,0 +1,35 @@
+.worker-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 25px;
+}
+
+.status-bar {
+  padding: 25px;
+  border-radius: 14px;
+  font-size: 22px;
+  text-align: center;
+  font-weight: 600;
+}
+
+.safe { background: linear-gradient(135deg, #15803d, #22c55e); }
+.warning { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+.danger { background: linear-gradient(135deg, #b91c1c, #ef4444); }
+
+.metrics-row {
+  display: flex;
+  gap: 20px;
+}
+
+.metric-card {
+  flex: 1;
+  background: rgba(255,255,255,0.05);
+  padding: 20px;
+  border-radius: 12px;
+}
+
+.health-card {
+  background: rgba(255,255,255,0.05);
+  padding: 25px;
+  border-radius: 12px;
+}

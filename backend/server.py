@@ -1,154 +1,111 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
-import math
-import time
-import random
+import serial
+import numpy as np
+from tensorflow.keras.models import load_model
 
 app = Flask(__name__)
-CORS(app)  # Allow requests from React dev server
+CORS(app)
 
-# ─── Simulation State Machine ────────────────────────────────────────────────
-# Phases: safe → buildup → anomaly → recovery → safe ...
-# This mimics how a real autoencoder would see vibration anomalies on a brick prototype
+# ===== LOAD MODEL =====
+model = load_model("autoencoder_model.h5", compile=False)
+mean = np.load("mean.npy")
+std = np.load("std.npy")
+
+# ===== SERIAL =====
+ser = serial.Serial('COM7', 115200, timeout=1)
 
 THRESHOLD = 0.26
+window_size = 100
 
-state = {
-    "phase": "safe",
-    "ticks_left": random.randint(12, 20),
-    "error": 0.13,
-    "history": [],        # last 50 readings
-    "anomaly_count": 0,
-}
+buffer = []
+history = []
 
-PHASE_NEXT = {
-    "safe":     "buildup",
-    "buildup":  "anomaly",
-    "anomaly":  "recovery",
-    "recovery": "safe",
-}
+# ===== FUNCTION =====
+def get_window():
+    while len(buffer) < window_size:
+        line = ser.readline().decode().strip()
+        values = line.split(',')
 
-PHASE_DURATION = {
-    "safe":     (12, 20),
-    "buildup":  (6, 10),
-    "anomaly":  (5, 9),
-    "recovery": (6, 10),
-}
+        if len(values) == 3:
+            try:
+                x = float(values[0])
+                y = float(values[1])
+                z = float(values[2])
+                buffer.append([x, y, z])
+            except:
+                pass
 
+    window = np.array(buffer[-window_size:])
+    return window
 
-def next_error(prev, phase):
-    """Generate next reconstruction error value based on current phase."""
-    if phase == "safe":
-        # Normal: tight cluster well below threshold
-        val = prev + (random.random() - 0.5) * 0.04 + (0.13 - prev) * 0.1
-        return max(0.05, val)
-    elif phase == "buildup":
-        # Gradually creeping up — like a developing structural crack
-        val = prev + random.random() * 0.025 + 0.008
-        return min(0.38, val)
-    elif phase == "anomaly":
-        # Volatile, high reconstruction error — model can't explain this signal
-        return 0.28 + random.random() * 0.18 + math.sin(time.time() * 3) * 0.04
-    elif phase == "recovery":
-        # Settling back down after anomaly resolved
-        val = prev - random.random() * 0.03 - 0.01
-        return max(0.08, val)
-    return prev
+# ===== SENSOR API =====
+@app.route("/api/sensor")
+def sensor():
+    window = get_window()
 
+    # Normalize
+    window_norm = (window - mean) / std
+    window_flat = window_norm.reshape(1, window_size * 3)
 
-def xyz_for_phase(phase):
-    """Simulate raw ADXL345 accelerometer X/Y/Z readings."""
-    amp = 0.8 if phase == "anomaly" else 0.35 if phase == "buildup" else 0.12
-    t = time.time()
-    return {
-        "x": round(math.sin(t / 0.18) * amp + (random.random() - 0.5) * 0.1, 3),
-        "y": round(math.cos(t / 0.22) * amp + (random.random() - 0.5) * 0.1, 3),
-        "z": round(math.sin(t / 0.15) * amp * 0.6 + (random.random() - 0.5) * 0.08, 3),
-    }
+    # Predict
+    recon = model.predict(window_flat, verbose=0)
+    mse = np.mean((window_flat - recon) ** 2)
 
+    # Save history
+    history.append(float(mse))
+    if len(history) > 50:
+        history.pop(0)
 
-def tick():
-    """Advance simulation by one step."""
-    s = state
-
-    # Phase transition
-    s["ticks_left"] -= 1
-    if s["ticks_left"] <= 0:
-        next_phase = PHASE_NEXT[s["phase"]]
-        s["phase"] = next_phase
-        lo, hi = PHASE_DURATION[next_phase]
-        s["ticks_left"] = random.randint(lo, hi)
-
-    # New error value
-    s["error"] = next_error(s["error"], s["phase"])
-
-    # Track anomaly count
-    if s["error"] > THRESHOLD:
-        s["anomaly_count"] += 1
-
-    # Rolling history (last 50)
-    s["history"].append(round(s["error"], 4))
-    if len(s["history"]) > 50:
-        s["history"].pop(0)
-
-
-# ─── Routes ──────────────────────────────────────────────────────────────────
-
-@app.route("/api/sensor", methods=["GET"])
-def get_sensor():
-    """
-    Worker dashboard polls this every 1.5s.
-    Returns current error, status, phase, and raw XYZ.
-    """
-    tick()
-
-    error = state["error"]
     status = (
-        "danger"  if error > THRESHOLD else
-        "warning" if error > THRESHOLD * 0.85 else
+        "danger" if mse > THRESHOLD else
+        "warning" if mse > THRESHOLD * 0.8 else
         "safe"
     )
 
+    # 📍 LOCATION (SIMPLE LOGIC)
+    location = "Center"
+    if abs(window[-1][0]) > 0.5:
+        location = "Left Side"
+    elif abs(window[-1][1]) > 0.5:
+        location = "Right Side"
+
     return jsonify({
-        "error":     round(error, 3),
+        "error": round(float(mse), 3),
         "threshold": THRESHOLD,
-        "status":    status,
-        "phase":     state["phase"],
-        "xyz":       xyz_for_phase(state["phase"]),
+        "status": status,
+        "xyz": {
+            "x": window[-1][0],
+            "y": window[-1][1],
+            "z": window[-1][2]
+        },
+        "location": location,
+        "buzzer": mse > THRESHOLD
     })
 
-
-@app.route("/api/analytics", methods=["GET"])
-def get_analytics():
-    """
-    Supervisor dashboard polls this every 1.5s.
-    Returns history + stats for the chart and summary cards.
-    """
-    history = state["history"]
-    avg = round(sum(history) / len(history), 3) if history else 0
-    maximum = round(max(history), 3) if history else 0
+# ===== ANALYTICS API =====
+@app.route("/api/analytics")
+def analytics():
+    avg = np.mean(history) if history else 0
+    mx = np.max(history) if history else 0
     anomalies = sum(1 for v in history if v > THRESHOLD)
 
     return jsonify({
-        "history":   history,
-        "avg":       avg,
-        "max":       maximum,
+        "history": history,
+        "avg": avg,
+        "max": mx,
         "anomalies": anomalies,
-        "threshold": THRESHOLD,
-        "phase":     state["phase"],
-        "latest":    round(state["error"], 3),
+        "threshold": THRESHOLD
     })
 
+# ===== BUZZER API FOR ESP32 =====
+@app.route("/api/alert")
+def alert():
+    if history and history[-1] > THRESHOLD:
+        return "true"
+    return "false"
 
-@app.route("/api/health", methods=["GET"])
-def health():
-    return jsonify({"status": "ok"})
-
-
-# ─── Run ─────────────────────────────────────────────────────────────────────
-
+# ===== RUN =====
 if __name__ == "__main__":
-    print("🚀 Edge AI Structural Monitoring — Simulation Server")
-    print(f"   Threshold: {THRESHOLD}")
-    print("   Endpoints: /api/sensor  |  /api/analytics  |  /api/health")
-    app.run(debug=True, port=5000)
+    print("🚀 LIVE EDGE AI SERVER RUNNING")
+    app.run(debug=True)
