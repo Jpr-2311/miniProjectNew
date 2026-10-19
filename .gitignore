@@ -38,3 +38,5 @@ dist/
 
 # Env
 .env
+# ESP32 Wi-Fi credentials
+mini_esp32/secrets.h

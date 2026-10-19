@@ -5,11 +5,15 @@
 
 MPU6050 mpu;
 
-const char* ssid = "abcd";
-const char* password = "jithin123";
+// Wi-Fi and server settings live in secrets.h, which is git-ignored.
+// Copy secrets.example.h to secrets.h and fill in your own values.
+#include "secrets.h"
+
+const char* ssid = WIFI_SSID;
+const char* password = WIFI_PASSWORD;
 
 // ===== SERVER =====
-const char* serverURL = "http://IP ADDRESS:5000/api/alert";
+const char* serverURL = ALERT_SERVER_URL;
 
 int buzzerPin = 23;
 
